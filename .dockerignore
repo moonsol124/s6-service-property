@@ -1,0 +1,23 @@
+# Ignore dependencies (already installed in the image)
+node_modules
+
+# Ignore environment files (should be injected at runtime)
+.env*
+.env.*.local
+
+# Ignore Git files
+.git
+.gitignore
+
+# Ignore Docker files themselves
+Dockerfile
+.dockerignore
+
+# Ignore OS files
+.DS_Store
+Thumbs.db
+
+# Ignore logs
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*

@@ -5,10 +5,23 @@ const cors = require('cors');
 const supabase = require('./supabaseClient'); // Import the Supabase client
 
 const app = express();
-const port = process.env.PORT || 3001; // Use port from .env or default to 3001
+const port = process.env.PORT || 3004; // Use port from .env or default to 3001
+
+// Allow ONLY your frontend origin for direct calls
+const corsOptions = {
+    origin: process.env.FRONTEND_URL, // Or use process.env.FRONTEND_URL if defined here
+    methods: 'GET,HEAD,PUT,PATCH,POST,DELETE', // Allow all standard methods
+    allowedHeaders: ['Content-Type', 'Authorization'], // Allow common headers (Authorization might be needed later if you add direct auth)
+    optionsSuccessStatus: 204 // Set success status for preflight requests
+    // credentials: false // Generally false/omit for direct calls not expecting cookies from frontend
+  };
+  console.log(`[Properties Service] CORS enabled for origin: ${corsOptions.origin}`); // Log CORS config
+  
+  // --- Middleware ---
+  app.use(cors(corsOptions)); // <<< ENABLE CORS WITH OPTIONS
 
 // --- Middleware ---
-app.use(cors()); // Enable CORS for all origins (adjust in production if needed)
+// app.use(cors()); // Enable CORS for all origins (adjust in production if needed)
 app.use(express.json()); // Parse JSON request bodies
 
 // --- Basic Route for Testing ---

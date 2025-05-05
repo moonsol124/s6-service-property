@@ -1,34 +1,26 @@
-# supabase-properties-crud/Dockerfile
+# Step 1: Use an official Node.js runtime as a parent image
+# Using Alpine Linux for smaller image size
+FROM node:18-alpine As base
 
-# Stage 1: Install dependencies
-FROM node:18-alpine AS deps
+# Step 2: Set the working directory in the container
 WORKDIR /app
-COPY package.json package-lock.json ./
-RUN npm ci --only=production # Install only production dependencies
 
-# Stage 2: Build application
-FROM node:18-alpine AS builder
-WORKDIR /app
-COPY --from=deps /app/node_modules ./node_modules
+# Step 3: Copy package.json and package-lock.json (or yarn.lock)
+# This leverages Docker layer caching. If these files don't change,
+# subsequent builds won't need to reinstall dependencies.
+COPY package*.json ./
+
+# Step 4: Install production dependencies
+# Using 'ci' for clean installs, respecting the lock file.
+RUN npm ci --only=production
+
+# Step 5: Copy the rest of the application code
 COPY . .
-# No build step needed for this simple Node server
 
-# Stage 3: Production image
-FROM node:18-alpine AS runner
-WORKDIR /app
+# Step 6: Expose the port the app runs on
+# Your app uses process.env.PORT || 3004. We expose the default.
+# The actual port mapping happens in Kubernetes.
+EXPOSE 3004
 
-# Set NODE_ENV environment variable
-ENV NODE_ENV production
-
-# Copy production dependencies and application code
-COPY --from=builder /app/node_modules ./node_modules
-COPY --from=builder /app/package.json ./package.json
-COPY --from=builder /app/app.js ./app.js
-COPY --from=builder /app/supabaseClient.js ./supabaseClient.js
-# DO NOT COPY .env - We will inject environment variables via Kubernetes
-
-# Expose the port the app runs on
-EXPOSE 3001
-
-# Run the application
-CMD ["node", "app.js"]
+# Step 7: Define the command to run the application
+CMD ["node", "server.js"]

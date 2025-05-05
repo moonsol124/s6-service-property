@@ -1,0 +1,46 @@
+# .github/workflows/docker-publish.yml
+name: Build and Push Docker Image (Properties Service - Password Auth)
+
+# Run this workflow on pushes to the main branch
+on:
+  push:
+    branches: [ main ]
+  # Allows you to run this workflow manually from the Actions tab
+  workflow_dispatch:
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest # Use a standard GitHub-hosted runner
+
+    steps:
+      # Step 1: Check out the repository code
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      # Step 2: Log in to Docker Hub (Using Password)
+      # Requires DOCKERHUB_USERNAME and DOCKERHUB_PASSWORD secrets configured in GitHub repo settings
+      # WARNING: Using password is less secure than an access token.
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_PASSWORD }} # <<< Using password secret
+
+      # Step 3: Set up Docker Buildx
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      # Step 4: Build the Docker image and push it to Docker Hub
+      - name: Build and Push Docker Image
+        uses: docker/build-push-action@v5
+        with:
+          context: . # Use the current directory as build context
+          file: ./Dockerfile # Path to the Dockerfile
+          push: true # Actually push the image
+          # Tag the image with 'latest' and optionally the Git SHA
+          tags: |
+            ${{ secrets.DOCKERHUB_USERNAME }}/properties-service:latest
+            ${{ secrets.DOCKERHUB_USERNAME }}/properties-service:${{ github.sha }}
+          # Enable build cache for faster builds (using GitHub cache)
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
