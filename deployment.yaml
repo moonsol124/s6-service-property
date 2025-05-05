@@ -1,0 +1,86 @@
+# properties-deployment.yaml
+
+# --- Optional: Namespace ---
+# Good practice to isolate resources
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: app-services
+---
+# --- Secret for Supabase Credentials ---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: supabase-credentials
+  namespace: app-services # Deploy in the created namespace
+type: Opaque # Default type for arbitrary key-value pairs
+data:
+  # Values must be base64 encoded. Use: echo -n 'YOUR_VALUE' | base64
+  # Replace YOUR_BASE64_... with the actual encoded values
+  SUPABASE_URL: aHR0cHM6Ly96eXV1c29ja2Z3cXN2bmZ0ZnV5ai5zdXBhYmFzZS5jbw==
+  SUPABASE_KEY: ZXlKaGJHY2lPaUpJVXpJMU5pSXNJblI1Y0NJNklrcFhWQ0o5LmV5SnBjM01pT2lKemRYQmhZbUZ6WlNJc0luSmxaaUk2SW5wNWRYVnpiMk5yWm5keGMzWnVablJtZFhscUlpd2ljbTlzWlNJNkltRnViMjRpTENKcFlYUWlPakUzTkRVMk56VXhNVFVzSW1WNGNDSTZNakEyTVRJMU1URXhOWDAuaDZEUmdYQTNnRldLTzNyMHVDRUZsTVJENk4xQmFEdGZ6enVBSnNqMnQySQ==
+---
+# --- ConfigMap for Non-Sensitive Configuration ---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: properties-config
+  namespace: app-services
+data:
+  # Define non-sensitive configuration or defaults
+  PORT: "3004" # Port the container listens on
+  # FRONTEND_URL is tricky in K8s unless the frontend is also inside.
+  # If the frontend runs outside K8s, use its actual URL.
+  # If the frontend runs inside K8s (same namespace), you might use its K8s service name.
+  # For now, set to a placeholder or the expected external URL.
+  FRONTEND_URL: "http://YOUR_EXPECTED_FRONTEND_URL_OR_GATEWAY" # Adjust as needed!
+---
+# --- Deployment for the Properties Service ---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: properties-service-deployment
+  namespace: app-services
+  labels:
+    app: properties-service # Label for selection
+spec:
+  replicas: 1 # Start with one instance
+  selector:
+    matchLabels:
+      app: properties-service # Selects pods with this label
+  template: # Pod template
+    metadata:
+      labels:
+        app: properties-service # Label applied to pods
+    spec:
+      containers:
+      - name: properties-service-container
+        # Use the image pushed by GitHub Actions
+        image: moonsol124/properties-service:latest # <<< REPLACE USERNAME
+        imagePullPolicy: Always # Always pull the latest image on pod startup
+        ports:
+        - containerPort: 3004 # Port exposed by the container
+        envFrom: # Load environment variables from ConfigMap and Secret
+        - configMapRef:
+            name: properties-config # Reference the ConfigMap above
+        - secretRef:
+            name: supabase-credentials # Reference the Secret above
+---
+# --- Service to Expose the Deployment ---
+apiVersion: v1
+kind: Service
+metadata:
+  name: properties-service-svc # Service name
+  namespace: app-services
+spec:
+  selector:
+    app: properties-service # Selects pods managed by the Deployment
+  ports:
+  - protocol: TCP
+    port: 80 # Port the Service listens on *within the cluster*
+    targetPort: 3004 # Port on the pod/container to forward traffic to
+  # Type determines how the service is exposed:
+  # ClusterIP: (Default) Exposes only within the cluster. Gateway needs to be inside K8s.
+  # NodePort: Exposes on each Node's IP at a static port. Good for Minikube access.
+  # LoadBalancer: Provisions cloud load balancer (for GKE). Minikube can simulate this with 'minikube tunnel'.
+  type: NodePort # Let's use NodePort for easy Minikube access initially
