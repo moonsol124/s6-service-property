@@ -1,0 +1,54 @@
+# .github/workflows/ci.yml
+name: CI Services
+
+on:
+  push:
+    branches:
+      - main # Or your default branch
+  pull_request:
+    branches:
+      - main # Or your default branch
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20.x' # Or your preferred LTS version
+
+      - name: Install dependencies
+        run: npm ci
+
+      # Optional: If your test DB doesn't persist schema across runs,
+      # you might need a step here to apply schemas for both user and property tables.
+      # Example (using psql, requires db connection string secret):
+      # - name: Apply Test DB Schema
+      #   env:
+      #     DATABASE_URL: ${{ secrets.SUPABASE_TEST_DB_DIRECT_URL }} # Replace with your test DB's direct connection string secret
+      #   run: |
+      #     sudo apt-get update && sudo apt-get install -y postgresql-client
+      #     psql $DATABASE_URL -c 'CREATE TABLE IF NOT EXISTS users (...);' # Your user schema SQL
+      #     psql $DATABASE_URL -c 'CREATE TABLE IF NOT EXISTS properties (...);' # Your property schema SQL
+
+
+      - name: Run tests
+        run: npm test
+        env:
+          # Pass Supabase credentials for the DEDICATED TEST database
+          # These secrets MUST point to your separate test Supabase project.
+          # They are read by your supabaseClient.js
+          SUPABASE_TEST_URL: ${{ secrets.SUPABASE_TEST_URL }}
+          SUPABASE_TEST_KEY: ${{ secrets.SUPABASE_TEST_KEY }}
+          # Define different test ports for each service to avoid conflicts during tests
+          TEST_USER_SERVICE_PORT: 3002
+          TEST_PROPERTY_SERVICE_PORT: 3003
+          # Keep your standard environment variables if needed by the app code itself
+          # (though supabaseClient is now prioritizing the TEST ones if set)
+          # SUPABASE_URL: ${{ secrets.SUPABASE_URL }} # Your prod/dev URL if also needed
+          # SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }} # Your prod/dev Key if also needed
