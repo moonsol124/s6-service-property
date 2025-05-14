@@ -1,5 +1,5 @@
 # .github/workflows/ci.yml
-name: CI Services
+name: Integration testing
 
 on:
   push:
