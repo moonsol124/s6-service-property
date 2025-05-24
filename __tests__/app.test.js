@@ -1,0 +1,597 @@
+// __tests__/app.test.js
+// Load environment variables FIRST
+require('dotenv').config({ path: '.env' });
+
+// Set the environment variables for the TEST database before requiring the app
+// This overrides the main ones for the duration of this test file's execution
+process.env.SUPABASE_URL = process.env.SUPABASE_TEST_URL;
+process.env.SUPABASE_KEY = process.env.SUPABASE_TEST_KEY;
+// Set a test port
+process.env.PORT = 4000; // Use a dedicated port for testing
+
+// Now require the app, which will use the test Supabase client instance because env vars are set
+const app = require('../app'); // <-- REQUIRE YOUR app.js FILE HERE
+const request = require('supertest'); // For making HTTP requests to the app
+
+// Create a SEPARATE Supabase client instance specifically for test setup/teardown
+// This client is used BY THE TEST FILE ITSELF to manipulate the DB directly,
+// NOT by the app instance being tested.
+const { createClient } = require('@supabase/supabase-js');
+const testSupabase = createClient(
+    process.env.SUPABASE_TEST_URL, // Use the test URL directly
+    process.env.SUPABASE_TEST_KEY  // Use the test KEY directly
+    // Add any necessary options like global.fetch or schema if different
+    // { global: { fetch } }
+);
+
+// Use specific, consistent user IDs for tests involving user properties
+// These IDs should ideally exist in the auth.users table of your TEST DB
+// if your RLS policies or foreign keys require it. (Though tests often skip this for simplicity)
+const TEST_USER_ID_1 = 'a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11'; // Example UUID
+const TEST_USER_ID_2 = 'b0eebc99-9c0b-4ef8-bb6d-6bb9bd380a22'; // Another example UUID
+
+let server; // Variable to hold the running server instance
+// testPropertyId is not strictly needed with proper beforeEach cleanup, but can be useful for single-item tests
+
+// --- Jest Setup and Teardown ---
+
+// Before all tests run: Start the server
+beforeAll((done) => {
+  // app.listen returns the server instance
+  server = app.listen(process.env.PORT, () => {
+    console.log(`Test server running on port ${process.env.PORT}`);
+    // Ensure the supertest agent targets the test port
+    request(server); // This initializes supertest with the server instance
+    done();
+  });
+});
+
+// After all tests run: Close the server
+afterAll((done) => {
+    if (server) {
+        server.close(done);
+        console.log('Test server closed.');
+    } else {
+        done();
+    }
+});
+
+// Before each test: Clean the properties table in the test database
+beforeEach(async () => {
+    console.log('Cleaning properties table before test...');
+    // Delete all rows from the 'properties' table using the *testSupabase* client
+    // Try a different filter syntax that means "id is not null"
+    const { error } = await testSupabase
+        .from('properties')
+        .delete()
+        .not("id", "is.null"); // <--- CHANGED FILTER SYNTAX HERE (uses PostgREST 'is.null')
+        // Alternative simple delete (might require RLS bypass or service role key):
+        // const { error } = await testSupabase.from('properties').delete().neq('id', '00000000-0000-0000-0000-000000000000');
+
+    if (error) {
+        console.error('Error cleaning properties table:', error);
+        // It is critical to fail the test if cleanup fails, otherwise subsequent tests will be unreliable
+        throw new Error(`Failed to clean properties table: ${error.message || 'Unknown DB error during cleanup'}`);
+    } else {
+        console.log('Properties table cleaned.');
+    }
+});
+
+// --- Integration Tests for Each Endpoint ---
+
+// GET / (Basic health check)
+describe('GET /', () => {
+    test('should return a success message', async () => {
+        const response = await request(app)
+            .get('/')
+            .expect(200); // Expect OK status
+
+        expect(response.text).toBe('Properties CRUD API with Supabase'); // Expect the specific text response
+    });
+});
+
+
+// POST /properties
+describe('POST /properties', () => {
+    test('should create a new property', async () => {
+        const newProperty = {
+            name: 'Test House',
+            address: '123 Test St',
+            price: '500000',
+            bedrooms: 3,
+            bathrooms: 2,
+            area: 1800,
+            image: 'http://example.com/test.jpg',
+            images: ['http://example.com/test1.jpg', 'http://example.com/test2.jpg'],
+            tags: ['modern', 'garden'],
+            description: 'A lovely test property.',
+            features: ['pool', 'garage'],
+            user_id: TEST_USER_ID_1 // Link to a test user ID - Requires user_id column in DB
+        };
+
+        const response = await request(app) // Use supertest configured for 'app'
+            .post('/properties')
+            .send(newProperty)
+            .expect(201); // Expect Created status code
+
+        // Assert response body structure and data
+        expect(response.body).toHaveProperty('id'); // ID should be generated by DB
+        expect(response.body.name).toBe(newProperty.name);
+        expect(response.body.user_id).toBe(newProperty.user_id); // Verify user_id is included
+        // Use expect.objectContaining for partial matches because Supabase adds created_at, updated_at etc.
+        // Ensure all *your* provided fields are matched
+        expect(response.body).toEqual(expect.objectContaining({
+            name: newProperty.name,
+            address: newProperty.address,
+            price: newProperty.price,
+            bedrooms: newProperty.bedrooms,
+            bathrooms: newProperty.bathrooms,
+            area: newProperty.area,
+            image: newProperty.image,
+            // Check array fields with expect.arrayContaining or deep equality if order matters
+            images: expect.arrayContaining(newProperty.images),
+            tags: expect.arrayContaining(newProperty.tags),
+            description: newProperty.description,
+            features: expect.arrayContaining(newProperty.features),
+            user_id: newProperty.user_id
+        }));
+        // Also expect generated fields like created_at if they exist in DB schema
+        expect(response.body).toHaveProperty('created_at');
+        expect(response.body).toHaveProperty('updated_at');
+
+
+        // Optional: Verify the property was actually inserted into the database using testSupabase
+        // This will also fail if user_id, created_at, updated_at are missing in DB
+        const { data, error } = await testSupabase
+            .from('properties')
+            .select('*')
+            .eq('id', response.body.id) // Use the ID returned by the API
+            .single();
+
+        expect(error).toBeNull(); // No DB error (assuming schema is fixed)
+        expect(data).toBeDefined(); // Data should exist
+        expect(data.id).toBe(response.body.id); // Verify ID matches
+        expect(data.user_id).toBe(newProperty.user_id); // Verify user_id in DB
+         // Check all original fields are in the DB data
+        expect(data).toEqual(expect.objectContaining(newProperty));
+        expect(data).toHaveProperty('created_at');
+        expect(data).toHaveProperty('updated_at');
+    });
+
+    test('should return 400 if property name is missing', async () => {
+        const invalidProperty = {
+             address: '123 Test St', // Missing name
+             user_id: TEST_USER_ID_1 // Need user_id even for invalid data if column exists and is not nullable
+        };
+
+        const response = await request(app)
+            .post('/properties')
+            .send(invalidProperty)
+            .expect(400); // Expect Bad Request
+
+        expect(response.body).toHaveProperty('error', 'Property name is required');
+    });
+
+    // Add more tests for other missing required fields if applicable based on your schema/validation
+    // Example: Test missing user_id if it's NOT nullable in DB
+    // test('should return 400 if user_id is missing', async () => { ... });
+});
+
+// GET /properties (Read All)
+describe('GET /properties', () => {
+    test('should return an empty array if no properties exist', async () => {
+        const response = await request(app)
+            .get('/properties')
+            .expect(200); // Expect OK
+
+        expect(response.body).toEqual([]); // Expect an empty array
+    });
+
+    
+});
+
+// GET /properties/:id (Read One)
+describe('GET /properties/:id', () => {
+    test('should return a specific property by ID', async () => {
+        // Insert a property directly using the test client
+        // Requires user_id, created_at, updated_at in DB schema for insert to work
+        const propertyToInsert = {
+             name: 'Specific Test Property', user_id: TEST_USER_ID_1, price: '750000', address: '456 Unique Ln'
+        };
+        const { data: insertedProperty, error: insertError } = await testSupabase
+            .from('properties')
+            .insert([propertyToInsert])
+            .select('*') // Select all columns to get the generated ones
+            .single(); // Assuming single insert, get the one result
+        expect(insertError).toBeNull(); // This will fail if schema is not fixed
+        const specificId = insertedProperty.id;
+
+        const response = await request(app)
+            .get(`/properties/${specificId}`)
+            .expect(200); // Expect OK
+
+        expect(response.body).toHaveProperty('id', specificId);
+        expect(response.body.name).toBe(propertyToInsert.name);
+        expect(response.body.user_id).toBe(propertyToInsert.user_id);
+        // Check that the response body is the complete object from the DB
+        // This includes generated fields like created_at and updated_at
+        expect(response.body).toEqual(expect.objectContaining(propertyToInsert));
+        expect(response.body).toHaveProperty('created_at');
+        expect(response.body).toHaveProperty('updated_at');
+    });
+
+    test('should return 404 if property ID does not exist', async () => {
+        const nonExistentId = 'c0eebc99-9c0b-4ef8-bb6d-6bb9bd380a33'; // A valid but non-existent UUID
+
+        const response = await request(app)
+            .get(`/properties/${nonExistentId}`)
+            .expect(404); // Expect Not Found
+
+        expect(response.body).toHaveProperty('error', 'Property not found');
+    });
+
+     // Test behavior with invalid UUID format. Your code handles this by throwing a Supabase error,
+     // which the route catches and returns 500.
+    test('should return 500 for invalid ID format (non-UUID)', async () => {
+        const invalidId = 'not-a-uuid'; // String that cannot be cast to UUID
+
+        const response = await request(app)
+            .get(`/properties/${invalidId}`)
+            // Expecting a 500 because the .eq('id', invalidId) will cause a Supabase DB error (code '22P02')
+            .expect(500);
+
+        expect(response.body).toHaveProperty('error'); // Expect an error message
+        // The exact error message might vary depending on Supabase/PostgREST, but indicates a data type issue.
+    });
+});
+
+
+// PUT /properties/:id (Update)
+describe('PUT /properties/:id', () => {
+    test('should update an existing property by ID', async () => {
+        // Insert a property to update
+        // Requires user_id, created_at, updated_at in DB schema for insert to work
+         const propertyToUpdate = {
+             name: 'Original Name', user_id: TEST_USER_ID_1, price: '100000', address: 'Update Me St'
+         };
+         const { data: insertedProperty, error: insertError } = await testSupabase
+            .from('properties')
+            .insert([propertyToUpdate])
+            .select('id') // Select ID to get the generated one
+            .single();
+         expect(insertError).toBeNull(); // This will fail if schema is not fixed
+         const updateId = insertedProperty.id;
+
+        const updates = {
+            name: 'Updated Name',
+            price: '150000',
+             user_id: TEST_USER_ID_2, // Can also update user_id if allowed by schema
+             bedrooms: 4, // Example of adding/changing another field
+             tags: ['updated', 'tags']
+        };
+
+        const response = await request(app)
+            .put(`/properties/${updateId}`)
+            .send(updates)
+            .expect(200); // Expect OK
+
+        // Assert response body reflects updates
+        expect(response.body).toHaveProperty('id', updateId);
+        expect(response.body.name).toBe(updates.name);
+        expect(response.body.price).toBe(updates.price);
+        expect(response.body.user_id).toBe(updates.user_id);
+        expect(response.body.bedrooms).toBe(updates.bedrooms);
+        expect(response.body.tags).toEqual(expect.arrayContaining(updates.tags));
+
+        // Use objectContaining to match the updates plus the original un-updated fields
+        expect(response.body).toEqual(expect.objectContaining({
+            id: updateId,
+            name: updates.name,
+            price: updates.price,
+            user_id: updates.user_id,
+            bedrooms: updates.bedrooms,
+            tags: expect.arrayContaining(updates.tags),
+            address: propertyToUpdate.address // Original address should still be there
+            // etc. for other fields not in 'updates'
+        }));
+        // Check generated fields still exist
+        expect(response.body).toHaveProperty('created_at');
+        expect(response.body).toHaveProperty('updated_at');
+
+
+        // Optional: Verify the property was updated in the database using testSupabase
+        const { data, error } = await testSupabase
+            .from('properties')
+            .select('*')
+            .eq('id', updateId)
+            .single();
+
+        expect(error).toBeNull(); // Assuming schema is fixed
+        expect(data).toBeDefined();
+        expect(data.id).toBe(updateId);
+        expect(data.name).toBe(updates.name);
+        expect(data.price).toBe(updates.price);
+        expect(data.user_id).toBe(updates.user_id);
+        expect(data.bedrooms).toBe(updates.bedrooms);
+        expect(data.tags).toEqual(expect.arrayContaining(updates.tags));
+
+        // Check generated fields are still present
+        expect(data).toHaveProperty('created_at');
+        expect(data).toHaveProperty('updated_at');
+    });
+
+     test('should return 404 if property ID to update does not exist', async () => {
+        const nonExistentId = 'd0eebc99-9c0b-4ef8-bb6d-6bb9bd380a44'; // Valid non-existent UUID
+        const updates = { name: 'Attempted Update' };
+
+        const response = await request(app)
+            .put(`/properties/${nonExistentId}`)
+            .send(updates)
+            .expect(404); // Expect Not Found
+
+        expect(response.body).toHaveProperty('error');
+        // Correct the expected error message to match your app.js code
+        expect(response.body.error).toBe('Property not found or no changes made'); // <--- CORRECTED LINE
+    });
+
+    test('should return 400 if no update data is provided', async () => {
+         // Insert a property (won't be updated, but needed for a valid ID)
+         // Requires user_id, created_at, updated_at in DB schema for insert to work
+         const propertyToUpdate = { name: 'No Update Test', user_id: TEST_USER_ID_1, price: '1' };
+         const { data: insertedProperty, error: insertError } = await testSupabase
+            .from('properties')
+            .insert([propertyToUpdate])
+            .select('id')
+            .single();
+         expect(insertError).toBeNull(); // This will fail if schema is not fixed
+         const updateId = insertedProperty.id;
+
+        const response = await request(app)
+            .put(`/properties/${updateId}`)
+            .send({}) // Empty body
+            .expect(400); // Expect Bad Request
+
+        expect(response.body).toHaveProperty('error', 'No update data provided');
+    });
+
+     // Test with invalid ID format (non-UUID) - likely 500 DB error
+     test('should return 500 for invalid ID format on update (non-UUID)', async () => {
+        const invalidId = 'not-a-uuid-for-update';
+        const updates = { name: 'Should Fail' };
+
+         const response = await request(app)
+             .put(`/properties/${invalidId}`)
+             .send(updates)
+             // Expecting a 500 because the .eq('id', invalidId) will cause a Supabase DB error (code '22P02')
+             .expect(500);
+
+         expect(response.body).toHaveProperty('error'); // Expect an error message
+     });
+});
+
+
+// DELETE /properties/:id (Delete One)
+describe('DELETE /properties/:id', () => {
+    test('should delete a specific property by ID and return 204', async () => {
+        // Insert a property to delete
+        // Requires user_id, created_at, updated_at in DB schema for insert to work
+         const propertyToDelete = { name: 'Delete Me', user_id: TEST_USER_ID_1, price: '999' };
+         const { data: insertedProperty, error: insertError } = await testSupabase
+            .from('properties')
+            .insert([propertyToDelete])
+            .select('id') // Select ID to get the generated one
+            .single();
+         expect(insertError).toBeNull(); // This will fail if schema is not fixed
+         const deleteId = insertedProperty.id;
+
+        const response = await request(app)
+            .delete(`/properties/${deleteId}`)
+            .expect(204); // Expect No Content
+
+        // Expect no response body for 204
+        expect(response.body).toEqual({}); // 204 responses have no body
+
+        // Verify the property was deleted from the database using testSupabase
+        const { data, error } = await testSupabase
+            .from('properties')
+            .select('id') // Select id to check existence
+            .eq('id', deleteId)
+            .single(); // Expect null data and PGRST116 error if deleted
+
+        // Check that it was NOT found (PostgREST single() returns null data and PGRST116 error for 0 rows)
+        expect(data).toBeNull();
+        expect(error).not.toBeNull();
+        expect(error.code).toBe('PGRST116'); // Supabase/PostgREST code for single() not found
+    });
+
+    test('should return 204 if property ID to delete does not exist (matching app behavior)', async () => { // <--- TEST DESCRIPTION UPDATED
+        const nonExistentId = 'e0eebc99-9c0b-4ef8-bb6d-6bb9bd380a55'; // Valid non-existent UUID
+
+        const response = await request(app)
+            .delete(`/properties/${nonExistentId}`)
+            // Expect 204 because your app code returns 204 if count is 0
+            .expect(204); // <--- EXPECT 204 HERE
+
+        // Expect no response body for 204
+        expect(response.body).toEqual({});
+    });
+
+    // Test with invalid ID format (non-UUID) - likely 500 DB error
+    test('should return 500 for invalid ID format on delete (non-UUID)', async () => {
+         const invalidId = 'not-a-uuid-for-delete';
+
+         const response = await request(app)
+             .delete(`/properties/${invalidId}`)
+              // Expecting a 500 because the .eq('id', invalidId) will cause a Supabase DB error (code '22P02')
+             .expect(500); // Expect 500 due to DB error
+
+         expect(response.body).toHaveProperty('error'); // Expect an error message
+     });
+});
+
+// GET /properties/user/:userId (Read by User ID)
+describe('GET /properties/user/:userId', () => {
+    test('should return all properties for a specific user ID', async () => {
+        // Insert properties for different users
+        // Requires user_id, created_at, updated_at in DB schema for insert to work
+        const propertiesToInsert = [
+            { name: 'User1 Prop A', user_id: TEST_USER_ID_1, price: '1' },
+            { name: 'User2 Prop X', user_id: TEST_USER_ID_2, price: '2' },
+            { name: 'User1 Prop B', user_id: TEST_USER_ID_1, price: '3' },
+            { name: 'User2 Prop Y', user_id: TEST_USER_ID_2, price: '4' },
+        ];
+         const { error: insertError } = await testSupabase
+            .from('properties')
+            .insert(propertiesToInsert);
+        expect(insertError).toBeNull(); // This will fail if schema is not fixed
+
+        // Fetch properties for user 1
+        const response1 = await request(app)
+            .get(`/properties/user/${TEST_USER_ID_1}`)
+            .expect(200);
+
+        expect(response1.body.length).toBe(2);
+        // Check that all returned properties belong to the requested user
+        expect(response1.body.every(p => p.user_id === TEST_USER_ID_1)).toBe(true);
+        // Check that the expected properties are present (order might not be guaranteed unless added to query)
+        expect(response1.body.map(p => p.name)).toEqual(expect.arrayContaining(['User1 Prop A', 'User1 Prop B']));
+
+         // Check structure of returned objects includes expected columns
+        if (response1.body.length > 0) {
+            expect(response1.body[0]).toHaveProperty('id');
+            expect(response1.body[0]).toHaveProperty('user_id');
+            expect(response1.body[0]).toHaveProperty('created_at');
+            expect(response1.body[0]).toHaveProperty('updated_at');
+            // Add checks for other columns like price, bedrooms, etc.
+        }
+
+
+        // Fetch properties for user 2
+        const response2 = await request(app)
+            .get(`/properties/user/${TEST_USER_ID_2}`)
+            .expect(200);
+
+        expect(response2.body.length).toBe(2);
+        expect(response2.body.every(p => p.user_id === TEST_USER_ID_2)).toBe(true);
+        expect(response2.body.map(p => p.name)).toEqual(expect.arrayContaining(['User2 Prop X', 'User2 Prop Y']));
+         // Check structure of returned objects includes expected columns
+        if (response2.body.length > 0) {
+            expect(response2.body[0]).toHaveProperty('id');
+            expect(response2.body[0]).toHaveProperty('user_id');
+            expect(response2.body[0]).toHaveProperty('created_at');
+            expect(response2.body[0]).toHaveProperty('updated_at');
+            // Add checks for other columns like price, bedrooms, etc.
+        }
+    });
+
+    test('should return an empty array if user ID exists but has no properties', async () => {
+         // Insert a property for a different user, but not the one we're testing for
+         // Requires user_id, created_at, updated_at in DB schema for insert to work
+        const propertyToInsert = { name: 'Other User Prop', user_id: TEST_USER_ID_2, price: '5' };
+         const { error: insertError } = await testSupabase
+            .from('properties')
+            .insert([propertyToInsert]);
+        expect(insertError).toBeNull(); // This will fail if schema is not fixed
+
+        // Fetch properties for user 1, who has no properties inserted in this test run
+        const response = await request(app)
+            .get(`/properties/user/${TEST_USER_ID_1}`)
+            .expect(200); // Expect OK
+
+        expect(response.body).toEqual([]); // Expect an empty array
+    });
+
+     test('should return an empty array if user ID does not exist (or has no properties)', async () => {
+         // No properties inserted in this test case, beforeEach ensures the table is empty
+         const nonExistentUserId = 'f0eebc99-9c0b-4ef8-bb6d-6bb9bd380a66'; // Valid non-existent UUID
+
+         const response = await request(app)
+             .get(`/properties/user/${nonExistentUserId}`)
+             .expect(200); // Expect OK
+
+         expect(response.body).toEqual([]); // Expect an empty array
+     });
+
+     // Test with invalid user ID format (non-UUID) - likely 500 DB error
+     test('should return 500 for invalid user ID format on GET by user ID (non-UUID)', async () => {
+         const invalidUserId = 'not-a-user-uuid';
+
+         const response = await request(app)
+             .get(`/properties/user/${invalidUserId}`)
+              // Expecting a 500 because the .eq('user_id', invalidId) will cause a Supabase DB error (code '22P02' or similar)
+             .expect(500); // Expect 500 due to DB error
+
+         expect(response.body).toHaveProperty('error'); // Expect an error message
+     });
+});
+
+// DELETE /properties/user/:userId (Delete by User ID)
+describe('DELETE /properties/user/:userId', () => {
+     test('should delete all properties for a specific user ID and return 204', async () => {
+        // Insert properties for different users
+        // Requires user_id, created_at, updated_at in DB schema for insert to work
+        const propertiesToInsert = [
+            { name: 'User1 Delete A', user_id: TEST_USER_ID_1, price: '10' },
+            { name: 'User2 Keep X', user_id: TEST_USER_ID_2, price: '20' },
+            { name: 'User1 Delete B', user_id: TEST_USER_ID_1, price: '30' },
+            { name: 'User2 Keep Y', user_id: TEST_USER_ID_2, price: '40' },
+        ];
+         const { error: insertError } = await testSupabase
+            .from('properties')
+            .insert(propertiesToInsert)
+             .select('id'); // Select IDs to verify later
+        expect(insertError).toBeNull(); // This will fail if schema is not fixed
+
+
+        // Delete properties for user 1
+        const response = await request(app)
+            .delete(`/properties/user/${TEST_USER_ID_1}`) // <-- Correct endpoint
+            .expect(204); // Expect No Content
+
+        // Expect no response body for 204
+        expect(response.body).toEqual({}); // 204 responses have no body
+
+        // Verify properties for user 1 are deleted using testSupabase
+        const { data: user1Props, error: user1Error } = await testSupabase
+            .from('properties')
+            .select('id')
+            .eq('user_id', TEST_USER_ID_1);
+
+        expect(user1Error).toBeNull(); // Expect no DB error on select
+        expect(user1Props).toEqual([]); // Should be empty
+
+        // Verify properties for user 2 are NOT deleted using testSupabase
+        const { data: user2Props, error: user2Error } = await testSupabase
+            .from('properties')
+            .select('id')
+            .eq('user_id', TEST_USER_ID_2);
+
+        expect(user2Error).toBeNull(); // Expect no DB error on select
+        expect(user2Props.length).toBe(2); // Should still have 2 properties
+    });
+
+    test('should return 204 if user ID exists but has no properties to delete', async () => {
+         // Insert a property for a different user
+         // Requires user_id, created_at, updated_at in DB schema for insert to work
+        const propertyToInsert = { name: 'Other User Prop To Keep', user_id: TEST_USER_ID_2, price: '50' };
+         const { error: insertError } = await testSupabase
+            .from('properties')
+            .insert([propertyToInsert]);
+        expect(insertError).toBeNull(); // This will fail if schema is not fixed
+
+        // Delete properties for user 1, who has no properties inserted in this test run
+        const response = await request(app)
+            .delete(`/properties/user/${TEST_USER_ID_1}`) // <-- Correct endpoint
+            .expect(204); // Expect No Content
+
+        expect(response.body).toEqual({}); // Expect empty body
+
+        // Verify no properties were deleted (e.g., check count in DB or re-fetch all using testSupabase)
+         const { data: allProps, error: allPropsError } = await testSupabase
+             .from('properties')
+             .select('id');
+        expect(allPropsError).toBeNull(); // Expect no DB error
+        expect(allProps.length).toBe(1); // Only the one property for user 2 should remain
+
+    });
+});

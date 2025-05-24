@@ -189,7 +189,88 @@ app.delete('/properties/:id', async (req, res) => {
     }
 });
 
-// --- Start the Server ---
-app.listen(port, () => {
-    console.log(`Server listening at http://localhost:${port}`);
+// GET: Get ALL property objects for a specific user ID
+// Endpoint is now /properties/user/:userId
+app.get('/properties/user/:userId', async (req, res) => { // <--- Changed to GET and updated path
+    const { userId } = req.params; // Get the user ID from the URL parameters
+    console.log(`[Properties Service GET /properties/user/:userId] Received request to get properties for user ID: ${userId}`);
+
+    try {
+        // Query the 'properties' table
+        // Select all columns ('*') where the 'user_id' column matches the provided userId
+        const { data: properties, error: dbError } = await supabase
+            .from('properties')
+            .select('*')         // Select all columns
+            .eq('user_id', userId); // Filter by the user_id column
+
+        console.log(`[Properties Service GET /properties/user/:userId] Supabase fetch result for User ID ${userId}:`, properties, dbError);
+
+
+        if (dbError) {
+            console.error(`[Properties Service GET /properties/user/:userId] Supabase fetch error (User ID: ${userId}):`, dbError);
+            // Return a 500 status for a database error
+            return res.status(500).json({ error: dbError.message || 'Failed to fetch properties' });
+        }
+
+        console.log(`[Properties Service GET /properties/user/:userId] Found ${properties ? properties.length : 0} properties for user ID: ${userId}.`);
+        // Return 200 OK and the array of property objects (or an empty array if none found)
+        res.status(200).json(properties || []); // Ensure we always return an array
+
+    } catch (err) {
+        // This catch block handles unexpected server errors during the process
+        console.error(`[Properties Service GET /properties/user/:userId] Unhandled server error (User ID: ${userId}):`, err);
+        res.status(500).json({ error: 'An unexpected error occurred while fetching properties' });
+    }
 });
+
+// DELETE: Remove ALL properties for a given user ID
+// Endpoint changed from /properties/:id to /users/:userId/properties
+app.delete('/properties/user/:userId', async (req, res) => {
+    // 1. Get the user ID from the URL parameters
+    const { userId } = req.params;
+
+    try {
+        // 2. Delete ALL rows in the 'properties' table where 'user_id' matches the provided userId
+        // This is the key change from deleting by property ID
+        const { error, count } = await supabase
+            .from('properties')
+            .delete()
+            .eq('user_id', userId); // <-- Filter by the user_id column
+
+        if (error) {
+            console.error(`Supabase Delete Error (User ID: ${userId}):`, error);
+            return res.status(500).json({ error: error.message || 'Failed to delete properties' });
+        }
+
+        console.log(`[Server DELETE /users/:userId/properties] Deleted ${count} properties for user ID: ${userId}`);
+
+        // If count is 0, it means the user exists but had no properties.
+        // This is a successful operation from the perspective of "ensure no properties for this user".
+        // Returning 204 No Content is appropriate.
+        if (count === 0) {
+             console.log(`[Server DELETE /users/:userId/properties] No properties found for user ID: ${userId} (0 rows deleted).`);
+             // Optionally, you could return 404 here if you specifically want to indicate
+             // that no resources matching the criteria were found *to* delete, but 204
+             // is more standard for "the state you requested (no properties for this user) is now achieved".
+             // return res.status(404).json({ error: 'No properties found for this user' });
+        }
+
+
+        // Successfully deleted (or no properties found to delete)
+        res.status(204).send(); // 204 No Content is standard for successful DELETE
+
+        // If you prefer a response body, you could do:
+        // res.status(200).json({ message: `Deleted ${count} properties for user ${userId}` });
+
+    } catch (err) {
+        console.error(`Server Delete Error (User ID: ${userId}):`, err);
+        res.status(500).json({ error: 'An unexpected error occurred' });
+    }
+});
+
+module.exports = app; // <--- ADD THIS LINE TO EXPORT THE APP INSTANCE
+
+// // --- Start the Server ---
+// app.listen(port, () => {
+//     console.log(`Server listening at http://localhost:${port}`);
+// });

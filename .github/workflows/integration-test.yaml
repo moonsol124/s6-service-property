@@ -1,0 +1,41 @@
+# .github/workflows/properties-service-tests.yml
+
+name: Properties Service Tests
+
+on:
+  push:
+    branches:
+      - main # Run on pushes to the main branch
+  pull_request:
+    branches:
+      - main # Optionally run on pull requests targeting main
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest # Use the latest version of Ubuntu
+
+    steps:
+      - name: Checkout Code # Get the code from the repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js # Install Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20' # Specify the Node.js version (or use a range like 'lts/*')
+          cache: 'npm' # Cache npm dependencies for faster builds
+
+      - name: Install Dependencies # Install project dependencies from package.json
+        run: npm install
+
+      - name: Run Jest Tests # Execute the test script from package.json
+        run: npm test # This command runs your script: cross-env SUPABASE_URL=... SUPABASE_KEY=... jest __tests__/app.test.js
+        env:
+          # Set the test Supabase credentials from GitHub Secrets
+          # These will be available as environment variables when the 'npm test' command runs.
+          # cross-env in your package.json will then pick these up and pass them to jest.
+          SUPABASE_TEST_URL: ${{ secrets.SUPABASE_TEST_URL }}
+          SUPABASE_TEST_KEY: ${{ secrets.SUPABASE_TEST_KEY }}
+
+      # Optional: Add steps here to build your application after tests pass (e.g., for deployment)
+      # - name: Build Application
+      #   run: npm run build
