@@ -1,6 +1,6 @@
 # .github/workflows/properties-service-tests.yml
 
-name: Properties Service Integration Tests
+name: Properties Service Tests
 
 on:
   push:
@@ -27,14 +27,19 @@ jobs:
       - name: Install Dependencies # Install project dependencies from package.json
         run: npm install
 
+      - name: Ensure cross-env is executable # <--- ADD THIS STEP
+        run: chmod +x node_modules/.bin/cross-env
+        shell: bash # Explicitly use bash, as the error mentioned 'sh'
+
       - name: Run Jest Tests # Execute the test script from package.json
-        run: npm test # This command runs your script: cross-env SUPABASE_URL=... SUPABASE_KEY=... jest __tests__/app.test.js
+        run: npm test # This command runs your script from package.json
+        shell: bash # Explicitly use bash for the test step as well
         env:
           # Set the test Supabase credentials from GitHub Secrets
           # These will be available as environment variables when the 'npm test' command runs.
-          # cross-env in your package.json will then pick these up and pass them to jest.
+          # cross-env will then pick these up and pass them to jest.
           SUPABASE_TEST_URL: ${{ secrets.SUPABASE_TEST_URL }}
-          SUPABASE_TEST_KEY: ${{ secrets.SUPABASE_TEST_KEY }}
+          SUPABASE_TEST_KEY: ${{ secrets.SUPABASE_TEST_KEY }} # Ensure this secret name is correct
 
       # Optional: Add steps here to build your application after tests pass (e.g., for deployment)
       # - name: Build Application
