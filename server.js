@@ -6,7 +6,7 @@ require('dotenv').config(); // Load environment variables
 // Import the Express application instance from app.js
 const app = require('./app');
 
-// Get the port from environment variables, defaulting to 3004     
+// Get the port from environment variables, defaulting to 3004      
 const port = process.env.PORT || 3004;
 
 // Start the server by calling listen on the imported app instance
