@@ -23,4 +23,4 @@ COPY . .
 EXPOSE 3004
 
 # Step 7: Define the command to run the application
-CMD ["node", "app.js"]
+CMD ["node", "server.js"]
