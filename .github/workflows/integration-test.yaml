@@ -1,6 +1,6 @@
 # .github/workflows/properties-service-tests.yml
 
-name: Properties Service Tests
+name: Properties Service Integration Tests
 
 on:
   push:
